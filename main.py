@@ -1,6 +1,13 @@
 """
-Entry point: starts the APScheduler and runs the pipeline on schedule.
-Run with: python main.py
+Local fallback scheduler — only needed if you are NOT using the Claude Code
+remote schedule (which is the recommended approach).
+
+The Claude Code daily schedule (xsiam-threat-intel-daily) runs pipeline.py
+automatically every day at 6 AM UTC from Anthropic's cloud.
+Manage it at: https://claude.ai/code/scheduled
+
+To run locally instead (keep this terminal open):
+    python main.py
 """
 
 import asyncio
@@ -23,23 +30,16 @@ async def scheduled_run():
 
 async def main():
     scheduler = AsyncIOScheduler()
-
-    trigger = CronTrigger(
-        hour=settings.schedule_hour,
-        minute=settings.schedule_minute,
-        timezone="UTC",
-    )
-
+    trigger = CronTrigger(hour=settings.schedule_hour, minute=settings.schedule_minute, timezone="UTC")
     scheduler.add_job(scheduled_run, trigger, id="threat_intel_pipeline", replace_existing=True)
     scheduler.start()
 
     logger.info(
-        f"Scheduler started — pipeline will run daily at "
-        f"{settings.schedule_hour:02d}:{settings.schedule_minute:02d} UTC"
+        f"Local scheduler started — pipeline fires daily at "
+        f"{settings.schedule_hour:02d}:{settings.schedule_minute:02d} UTC. "
+        f"Close terminal to stop."
     )
-    logger.info("Run 'python pipeline.py' to trigger immediately without waiting for the schedule.")
 
-    # Keep the event loop alive
     try:
         while True:
             await asyncio.sleep(3600)

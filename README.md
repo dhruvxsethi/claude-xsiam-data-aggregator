@@ -1,68 +1,142 @@
 # XSIAM Threat Intel Aggregator
 
-Pulls global cyber attack data daily from 6 free feeds, normalises it, and pushes it into Cortex XSIAM. Built for banking sector threat monitoring.
+Pulls global cyber attack data daily from 6 free feeds, normalises it, deduplicates across sources, and pushes it into Cortex XSIAM for dashboards and detection rules. Built for banking sector threat monitoring.
 
-## Sources
-
-| Feed | What it tracks |
-|------|---------------|
-| AlienVault OTX | Threat campaigns + IOCs (banking-tagged) |
-| CISA KEV | Actively exploited CVEs (US Gov) |
-| NVD | New CVEs published in last 24h |
-| Feodo Tracker | Live C2 IPs for Emotet, QakBot, Dridex, TrickBot |
-| ThreatFox | IOCs by malware family |
-| URLhaus | Malicious URLs actively distributing malware |
+**Feeds:** AlienVault OTX · CISA KEV · NVD CVE · Feodo Tracker · ThreatFox · URLhaus
 
 ---
 
-## Setup
+## Getting Started (New User)
 
-**1. Install dependencies**
+### Step 1 — Get the code
+
 ```bash
+git clone https://github.com/dhruvxsethi/claude-xsiam-data-aggregator
+cd claude-xsiam-data-aggregator
 pip install -r requirements.txt
 ```
 
-**2. Get your free OTX key** — [otx.alienvault.com](https://otx.alienvault.com) → profile → API Integration
+Or download the ZIP and unzip it.
 
-**3. Create HTTP Log Collector in XSIAM**
-`Settings → Configurations → Data Sources → + Add Data Source → Custom → HTTP Based Collector`
-Set Log Format: `JSON`. Save — copy the URL and token it gives you.
+### Step 2 — Get credentials
 
-**4. Configure credentials**
+**AlienVault OTX (free)**
+1. Create account at [otx.alienvault.com](https://otx.alienvault.com)
+2. Profile icon → API Integration → copy the key
+
+**Cortex XSIAM**
+1. XSIAM → `Settings → Data Sources → Add Data Source`
+2. Choose `Custom → HTTP Based Collector`
+3. Set Log Format to `JSON`
+4. Click **Save & Generate Token**
+5. Copy the **endpoint URL** and **token**
+
+### Step 3 — Configure
+
 ```bash
 cp .env.example .env
-# Fill in OTX_API_KEY, XSIAM_BASE_URL, XSIAM_API_KEY
 ```
 
----
+Open `.env` and fill in:
+```
+OTX_API_KEY=your_otx_key
+XSIAM_BASE_URL=https://api-YOUR-TENANT.xdr.us.paloaltonetworks.com/logs/v1/event
+XSIAM_API_KEY=your_xsiam_token
+```
 
-## Running
+### Step 4 — Test
 
-| Command | What it does |
-|---------|-------------|
-| `python pipeline.py --dry-run` | Collect + print summary, skip XSIAM push |
-| `python pipeline.py` | Collect and push to XSIAM |
-| `python pipeline.py --days 7` | Pull last 7 days instead of 24h |
-| `python main.py` | Start daily scheduler (runs at 6 AM UTC, keep terminal open) |
+```bash
+# Collect from all feeds, print summary, skip XSIAM push
+python pipeline.py --dry-run
+```
 
----
+You should see 100–500 events collected across all sources. If everything returns 0 with `ConnectError` — VPN or firewall is blocking outbound HTTP. Turn off VPN and retry.
 
-## Verify in XSIAM
+### Step 5 — Push to XSIAM
 
-After `python pipeline.py`, go to **Investigation → XQL Search** and run:
+```bash
+python pipeline.py
+```
+
+### Step 6 — Verify in XSIAM
+
+Go to **Investigation → XQL Search** and run:
 
 ```xql
 dataset = global_threat_intel_raw
 | limit 10
 ```
 
-Rows = connected. Empty = check terminal for errors.
+Rows = working. Empty = check terminal output for errors.
 
 ---
 
-## Key XQL Queries
+## Running Commands
 
-**Banking attacks only**
+| Command | What it does |
+|---------|-------------|
+| `python pipeline.py --dry-run` | Collect + print summary, no XSIAM push |
+| `python pipeline.py` | Collect and push to XSIAM |
+| `python pipeline.py --days 7` | Backfill last 7 days (good for first run) |
+| `python main.py` | Local scheduler — runs daily at configured UTC time (terminal must stay open) |
+
+---
+
+## Automated Daily Schedule (Claude Code)
+
+The recommended way to run this automatically is via the **Claude Code remote schedule** — no terminal needs to stay open.
+
+**Schedule is already created:** [claude.ai/code/scheduled](https://claude.ai/code/scheduled)  
+**Trigger name:** `xsiam-threat-intel-daily`  
+**Fires:** Every day at 6:00 AM UTC
+
+**One-time setup — add your credentials to the schedule:**
+1. Go to [claude.ai/code/scheduled](https://claude.ai/code/scheduled)
+2. Click on `xsiam-threat-intel-daily`
+3. Edit the prompt and replace the 3 placeholder values:
+   - `REPLACE_WITH_OTX_KEY` → your OTX API key
+   - `REPLACE_WITH_XSIAM_URL` → your XSIAM endpoint URL
+   - `REPLACE_WITH_XSIAM_TOKEN` → your XSIAM token
+4. Save
+
+From then on it runs every morning automatically, clones the repo fresh, runs the pipeline, and reports results.
+
+**To run it immediately** (without waiting for 6 AM):
+```
+# In Claude Code terminal:
+/schedule run xsiam-threat-intel-daily
+```
+
+---
+
+## Using the Claude Code Skill
+
+If you're using Claude Code, there's a built-in skill that handles the entire setup:
+
+```
+/setup-threat-intel
+```
+
+It will:
+1. Check for missing credentials and ask you for each one
+2. Run `--dry-run` to confirm feeds are working
+3. Push to XSIAM
+4. Walk you through verifying data in XQL
+
+---
+
+## XQL Queries (XSIAM → Investigation → XQL Search)
+
+**All events today**
+```xql
+dataset = global_threat_intel_raw
+| filter _time > now() - 1d
+| fields _time, source_feed, event_type, severity, title, target_sector
+| sort _time desc
+```
+
+**Banking threats only**
 ```xql
 dataset = global_threat_intel_raw
 | filter target_sector = "banking"
@@ -70,21 +144,12 @@ dataset = global_threat_intel_raw
 | sort _time desc
 ```
 
-**All IOCs (IPs, domains, URLs, hashes)**
-```xql
-dataset = global_threat_intel_raw
-| filter event_type = "ioc"
-| filter _time > now() - 7d
-| fields _time, ioc_type, ioc_value, threat_family, severity, source_feed, seen_in
-| sort _time desc
-```
-
-**High-confidence IOCs — seen in multiple feeds**
+**High-confidence IOCs (seen in 2+ feeds)**
 ```xql
 dataset = global_threat_intel_raw
 | filter event_type = "ioc"
 | filter array_length(seen_in) > 1
-| fields _time, ioc_value, ioc_type, seen_in, severity
+| fields _time, ioc_value, ioc_type, seen_in, severity, threat_family
 ```
 
 **Critical + high severity**
@@ -95,7 +160,7 @@ dataset = global_threat_intel_raw
 | sort _time desc
 ```
 
-**New exploited CVEs**
+**New exploited CVEs (CISA KEV)**
 ```xql
 dataset = global_threat_intel_raw
 | filter source_feed = "CISA KEV"
@@ -103,7 +168,7 @@ dataset = global_threat_intel_raw
 | fields _time, cve_id, affected_product, severity, description
 ```
 
-**Did a bad IP hit your environment?** *(needs endpoints in XSIAM)*
+**Did a bad IP hit your environment?**
 ```xql
 dataset = xdr_data
 | filter _time > now() - 1d
@@ -118,33 +183,50 @@ dataset = xdr_data
 
 ---
 
-## Detection Rules in XSIAM
+## Detection Rules
 
-**BIOC — endpoint hit a known-bad IP:**
-`Correlation → BIOC Rules → New Rule` → paste the IOC correlation query above → Severity: High
+**BIOC — endpoint contacted a known-bad IP**
+`XSIAM → Correlation → BIOC Rules → New Rule` → paste the "bad IP" query above → Severity: High
 
-**Analytics — critical CVE published:**
-`Correlation → Analytics Rules → New Rule` → filter `source_feed = "CISA KEV" and severity = "critical"` → Severity: Critical
-
----
-
-## Claude Code Skill
-
-If you're running this with Claude Code, use the built-in skill to get set up in one command:
+**Analytics — critical CVE published**
+`XSIAM → Correlation → Analytics Rules → New Rule`
+```xql
+dataset = global_threat_intel_raw
+| filter source_feed = "CISA KEV" and severity = "critical"
+| filter _time > now() - 1h
 ```
-/setup-threat-intel
-```
-Claude will check your credentials, run the pipeline, and walk you through verifying data in XSIAM.
+Severity: Critical
 
 ---
 
 ## Environment Variables
 
-| Variable | Required | Where to get it |
-|----------|----------|----------------|
-| `OTX_API_KEY` | Yes | otx.alienvault.com → profile → API Integration |
-| `XSIAM_BASE_URL` | Yes | Full URL from HTTP Based Collector screen |
-| `XSIAM_API_KEY` | Yes | Token from HTTP Based Collector screen |
-| `NVD_API_KEY` | No | nvd.nist.gov/developers (increases rate limits) |
-| `SCHEDULE_HOUR` | No | UTC hour for daily run (default: 6) |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OTX_API_KEY` | Yes | Free at otx.alienvault.com |
+| `XSIAM_BASE_URL` | Yes | Endpoint URL from HTTP Based Collector |
+| `XSIAM_API_KEY` | Yes | Token from HTTP Based Collector |
+| `NVD_API_KEY` | No | Increases NVD rate limits (free at nvd.nist.gov) |
+| `SCHEDULE_HOUR` | No | UTC hour for local scheduler (default: 6) |
 | `SCHEDULE_MINUTE` | No | UTC minute (default: 0) |
+
+---
+
+## Project Structure
+
+```
+├── collectors/
+│   ├── alienvault_otx.py   # OTX campaigns + banking IOCs
+│   ├── cisa_kev.py         # Actively exploited CVEs
+│   ├── nvd_cve.py          # New CVEs (last 24h)
+│   ├── feodo_tracker.py    # Live C2 IPs for banking trojans
+│   ├── threatfox.py        # IOCs by malware family
+│   └── urlhaus.py          # Malicious URLs
+├── normalizer/
+│   └── schema.py           # ThreatEvent — unified schema for all sources
+├── xsiam/
+│   └── ingestor.py         # Batches + POSTs to XSIAM
+├── pipeline.py             # Main runner (collect → deduplicate → push)
+├── main.py                 # Local scheduler fallback
+└── config.py               # Loads settings from .env
+```
