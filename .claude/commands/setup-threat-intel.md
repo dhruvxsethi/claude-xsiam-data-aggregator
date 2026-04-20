@@ -25,7 +25,7 @@ Ask: "Ready to push to XSIAM?" — if yes, run: `python pipeline.py`
 
 After a successful push, show this XQL query to verify data arrived:
 ```
-dataset = global_threat_intel_raw
+dataset = custom_threatintelaggregator_raw
 | limit 10
 ```
 Tell them: XSIAM → Investigation → XQL Search → paste the query. Rows = working.

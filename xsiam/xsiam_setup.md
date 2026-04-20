@@ -8,7 +8,7 @@
 4. Choose **Custom** → **HTTP Log Collector**
 5. Fill in:
    - Name: `Global Threat Intel`
-   - Dataset name: `global_threat_intel`
+   - Dataset name: `custom_threatintelaggregator_raw`
    - Vendor: `Custom`
    - Product: `ThreatIntelAggregator`
 6. Click **Create**
@@ -26,7 +26,7 @@ After your first pipeline run (`python pipeline.py`):
 1. Go to **Investigation → XQL Search**
 2. Run:
 ```xql
-dataset = global_threat_intel_raw
+dataset = custom_threatintelaggregator_raw
 | limit 10
 ```
 You should see events. If empty, check logs in the terminal.
@@ -59,7 +59,7 @@ You should see events. If empty, check logs in the terminal.
 dataset = xdr_data
 | filter _time > now() - 1h
 | join type=inner (
-    dataset = global_threat_intel_raw
+    dataset = custom_threatintelaggregator_raw
     | filter event_type = "ioc" and target_sector = "banking"
     | filter _time > now() - 24h
     | fields ioc_value
@@ -75,7 +75,7 @@ dataset = xdr_data
 1. **Correlation → Analytics Rules → New Rule**
 2. XQL filter:
 ```xql
-dataset = global_threat_intel_raw
+dataset = custom_threatintelaggregator_raw
 | filter source_feed = "CISA KEV"
 | filter severity = "critical"
 | filter _time > now() - 1h

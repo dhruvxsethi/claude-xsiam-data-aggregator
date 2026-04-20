@@ -36,7 +36,7 @@ pip install -r requirements.txt
 **Cortex XSIAM**
 1. XSIAM → `Settings → Data Sources → Add Data Source`
 2. Choose `Custom → HTTP Based Collector`
-3. Name it `global_threat_intel`, set Log Format to `JSON`
+3. Name it `custom_threatintelaggregator_raw`, set Log Format to `JSON`
 4. Click **Save & Generate Token**
 5. Copy the **endpoint URL** and **token** shown on screen — you only see these once
 
@@ -73,10 +73,10 @@ python pipeline.py
 After the first successful push:
 
 1. Go to **XSIAM → Investigation → XQL Search**
-2. In the left panel, click **Datasets** — you should see `global_threat_intel_raw` appear after the first push
+2. In the left panel, click **Datasets** — you should see `custom_threatintelaggregator_raw` appear after the first push
 3. Run:
 ```xql
-dataset = global_threat_intel_raw
+dataset = custom_threatintelaggregator_raw
 | limit 10
 ```
 
@@ -143,7 +143,7 @@ launchctl unload ~/Library/LaunchAgents/com.xsiam.threat-intel.plist
 
 **All events today**
 ```xql
-dataset = global_threat_intel_raw
+dataset = custom_threatintelaggregator_raw
 | filter _time > now() - 1d
 | fields _time, source_feed, event_type, severity, title, target_sector
 | sort _time desc
@@ -151,7 +151,7 @@ dataset = global_threat_intel_raw
 
 **Banking threats only**
 ```xql
-dataset = global_threat_intel_raw
+dataset = custom_threatintelaggregator_raw
 | filter target_sector = "banking"
 | filter _time > now() - 7d
 | sort _time desc
@@ -159,7 +159,7 @@ dataset = global_threat_intel_raw
 
 **High-confidence IOCs (seen in 2+ feeds)**
 ```xql
-dataset = global_threat_intel_raw
+dataset = custom_threatintelaggregator_raw
 | filter event_type = "ioc"
 | filter array_length(seen_in) > 1
 | fields _time, ioc_value, ioc_type, seen_in, severity, threat_family
@@ -167,7 +167,7 @@ dataset = global_threat_intel_raw
 
 **Critical + high severity**
 ```xql
-dataset = global_threat_intel_raw
+dataset = custom_threatintelaggregator_raw
 | filter severity in ("critical", "high")
 | filter _time > now() - 24h
 | sort _time desc
@@ -175,7 +175,7 @@ dataset = global_threat_intel_raw
 
 **New exploited CVEs (CISA KEV)**
 ```xql
-dataset = global_threat_intel_raw
+dataset = custom_threatintelaggregator_raw
 | filter source_feed = "CISA KEV"
 | filter _time > now() - 7d
 | fields _time, cve_id, affected_product, severity, description
@@ -186,7 +186,7 @@ dataset = global_threat_intel_raw
 dataset = xdr_data
 | filter _time > now() - 1d
 | join type=inner (
-    dataset = global_threat_intel_raw
+    dataset = custom_threatintelaggregator_raw
     | filter event_type = "ioc" and ioc_type = "ip"
     | filter _time > now() - 24h
     | fields ioc_value
@@ -204,7 +204,7 @@ dataset = xdr_data
 **Analytics — critical CVE published**
 `XSIAM → Correlation → Analytics Rules → New Rule`
 ```xql
-dataset = global_threat_intel_raw
+dataset = custom_threatintelaggregator_raw
 | filter source_feed = "CISA KEV" and severity = "critical"
 | filter _time > now() - 1h
 ```

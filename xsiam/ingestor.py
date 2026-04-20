@@ -19,13 +19,14 @@ class XSIAMIngestor:
 
     def _headers(self) -> dict:
         return {
-            "Authorization": f"Bearer {self._api_key}",
+            "Authorization": self._api_key,
             "Content-Type": "application/json",
         }
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=15))
     async def _post_batch(self, client: httpx.AsyncClient, batch: List[dict]) -> None:
-        body = json.dumps(batch)
+        # One JSON object per line — XSIAM HTTP log collector format
+        body = "\n".join(json.dumps(event) for event in batch)
         resp = await client.post(self._url, content=body.encode(), headers=self._headers(), timeout=30)
         resp.raise_for_status()
 
