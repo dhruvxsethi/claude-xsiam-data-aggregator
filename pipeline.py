@@ -2,8 +2,9 @@
 Core pipeline: collect → deduplicate → push to XSIAM.
 
 Flags:
-  --dry-run     Collect only, skip XSIAM push (safe without credentials)
-  --days N      Look back N days instead of 24h (default: 1, max: 7)
+  --dry-run       Collect only, skip XSIAM push
+  --show-events   Print every collected event as a table (combine with --dry-run to preview what would be pushed)
+  --days N        Look back N days instead of 24h (default: 1, max: 7)
 """
 
 import asyncio
@@ -23,11 +24,7 @@ from xsiam.ingestor import XSIAMIngestor
 
 
 def deduplicate(events: List[ThreatEvent]) -> List[ThreatEvent]:
-    """
-    Merge duplicate IOCs seen across multiple feeds.
-    Same ioc_value from different sources → one event with seen_in populated.
-    """
-    ioc_map: dict[str, ThreatEvent] = {}
+    ioc_map: dict = {}
     result: List[ThreatEvent] = []
 
     for event in events:
@@ -37,7 +34,6 @@ def deduplicate(events: List[ThreatEvent]) -> List[ThreatEvent]:
                 existing = ioc_map[key]
                 if event.source_feed not in existing.seen_in:
                     existing.seen_in.append(event.source_feed)
-                # Escalate severity if a duplicate comes in higher
                 sev_order = ["info", "low", "medium", "high", "critical"]
                 if sev_order.index(event.severity) > sev_order.index(existing.severity):
                     existing.severity = event.severity
@@ -50,9 +46,53 @@ def deduplicate(events: List[ThreatEvent]) -> List[ThreatEvent]:
 
     dupes = len(events) - len(result)
     if dupes:
-        logger.info(f"[Pipeline] Deduplication: {dupes} duplicate IOCs merged, {len(result)} unique events")
+        logger.info(f"[Pipeline] Deduplication: {dupes} duplicates merged → {len(result)} unique events")
 
     return result
+
+
+def print_events_table(events: List[ThreatEvent]) -> None:
+    """Print every event as a readable table — exactly what gets pushed to XSIAM."""
+    SEV_LABEL = {"critical": "CRIT", "high": "HIGH", "medium": "MED ", "low": "LOW ", "info": "INFO"}
+    col = {"time": 20, "source": 18, "type": 13, "sev": 6, "detail": 45}
+    hr = "─" * (sum(col.values()) + len(col) * 3 + 1)
+
+    print(f"\n{'─' * 20} EVENTS THAT WOULD BE PUSHED TO XSIAM {'─' * 20}")
+    header = (
+        f"{'TIMESTAMP':<{col['time']}}  "
+        f"{'SOURCE':<{col['source']}}  "
+        f"{'TYPE':<{col['type']}}  "
+        f"{'SEV':<{col['sev']}}  "
+        f"{'TITLE / IOC / CVE':<{col['detail']}}"
+    )
+    print(header)
+    print(hr)
+
+    for e in events:
+        ts = e.record_time[:19].replace("T", " ")
+
+        if e.event_type == "ioc":
+            detail = f"{e.ioc_type}: {e.ioc_value}"
+            if e.threat_family:
+                detail += f"  [{e.threat_family}]"
+            if len(e.seen_in) > 1:
+                detail += f"  ⚑ {len(e.seen_in)} feeds"
+        elif e.event_type == "vulnerability":
+            detail = f"{e.cve_id or ''} {e.affected_product or ''}"
+        else:
+            detail = e.title
+
+        sev = SEV_LABEL.get(e.severity, e.severity[:4].upper())
+        print(
+            f"{ts:<{col['time']}}  "
+            f"{e.source_feed:<{col['source']}}  "
+            f"{e.event_type:<{col['type']}}  "
+            f"{sev:<{col['sev']}}  "
+            f"{detail[:col['detail']]:<{col['detail']}}"
+        )
+
+    print(hr)
+    print(f"  Total: {len(events)} events  |  ⚑ = seen in multiple feeds (high confidence)\n")
 
 
 def print_summary(events: List[ThreatEvent], pushed: int, dry_run: bool) -> None:
@@ -71,9 +111,9 @@ def print_summary(events: List[ThreatEvent], pushed: int, dry_run: bool) -> None
         if len(e.seen_in) > 1:
             multi_source_iocs += 1
 
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 55)
     print("  THREAT INTEL PIPELINE — RUN SUMMARY")
-    print("=" * 50)
+    print("=" * 55)
     print(f"  Total events collected : {len(events)}")
     print(f"  Banking/finance related: {banking_count}")
     print(f"  IOCs seen in 2+ feeds  : {multi_source_iocs}  ← high confidence")
@@ -81,20 +121,20 @@ def print_summary(events: List[ThreatEvent], pushed: int, dry_run: bool) -> None
     print()
     print("  By source:")
     for src, count in sorted(by_source.items(), key=lambda x: -x[1]):
-        print(f"    {src:<25} {count}")
+        print(f"    {src:<28} {count}")
     print()
     print("  By type:")
     for t, count in sorted(by_type.items(), key=lambda x: -x[1]):
-        print(f"    {t:<25} {count}")
+        print(f"    {t:<28} {count}")
     print()
     print("  By severity:")
     for sev in ["critical", "high", "medium", "low", "info"]:
         if sev in by_severity:
-            print(f"    {sev:<25} {by_severity[sev]}")
-    print("=" * 50 + "\n")
+            print(f"    {sev:<28} {by_severity[sev]}")
+    print("=" * 55 + "\n")
 
 
-async def run_pipeline(dry_run: bool = False, days: int = 1) -> dict:
+async def run_pipeline(dry_run: bool = False, days: int = 1, show_events: bool = False) -> dict:
     collectors = [
         AlienVaultOTXCollector(),
         CISAKEVCollector(),
@@ -114,6 +154,9 @@ async def run_pipeline(dry_run: bool = False, days: int = 1) -> dict:
             logger.error(f"[Pipeline] {collector.name} crashed: {e}")
 
     all_events = deduplicate(all_events)
+
+    if show_events:
+        print_events_table(all_events)
 
     pushed = 0
     if dry_run:
@@ -139,6 +182,7 @@ async def run_pipeline(dry_run: bool = False, days: int = 1) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Threat intel pipeline")
     parser.add_argument("--dry-run", action="store_true", help="Collect only, skip XSIAM push")
+    parser.add_argument("--show-events", action="store_true", help="Print every event as a table")
     parser.add_argument("--days", type=int, default=1, help="How many days back to pull (default: 1)")
     args = parser.parse_args()
-    asyncio.run(run_pipeline(dry_run=args.dry_run, days=args.days))
+    asyncio.run(run_pipeline(dry_run=args.dry_run, days=args.days, show_events=args.show_events))

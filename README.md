@@ -1,14 +1,25 @@
 # XSIAM Threat Intel Aggregator
 
-Pulls global cyber attack data daily from 6 free feeds, normalises it, deduplicates across sources, and pushes it into Cortex XSIAM for dashboards and detection rules. Built for banking sector threat monitoring.
+Pulls global cyber attack data daily from 6 free feeds, normalises it, deduplicates across sources, and pushes it into Cortex XSIAM. Built for banking sector threat monitoring.
 
 **Feeds:** AlienVault OTX · CISA KEV · NVD CVE · Feodo Tracker · ThreatFox · URLhaus
 
 ---
 
-## Getting Started (New User)
+## How it runs (split architecture)
 
-### Step 1 — Get the code
+| Where | What it does | Credentials needed |
+|-------|-------------|-------------------|
+| **Claude Code schedule** (cloud, daily 6 AM UTC) | Collects from all 6 feeds, prints full events table | OTX key only |
+| **Mac launchd** (local, daily 2 PM SGT) | Collects + pushes to XSIAM | OTX + XSIAM |
+
+The cloud schedule gives you visibility into what's being collected every day. The local job does the actual XSIAM push. Both are independent — if one fails, the other still runs.
+
+---
+
+## Setup (New User)
+
+### 1. Get the code
 
 ```bash
 git clone https://github.com/dhruvxsethi/claude-xsiam-data-aggregator
@@ -16,117 +27,119 @@ cd claude-xsiam-data-aggregator
 pip install -r requirements.txt
 ```
 
-Or download the ZIP and unzip it.
-
-### Step 2 — Get credentials
+### 2. Get credentials
 
 **AlienVault OTX (free)**
 1. Create account at [otx.alienvault.com](https://otx.alienvault.com)
-2. Profile icon → API Integration → copy the key
+2. Profile icon (top right) → API Integration → copy the key
 
 **Cortex XSIAM**
 1. XSIAM → `Settings → Data Sources → Add Data Source`
 2. Choose `Custom → HTTP Based Collector`
-3. Set Log Format to `JSON`
+3. Name it `global_threat_intel`, set Log Format to `JSON`
 4. Click **Save & Generate Token**
-5. Copy the **endpoint URL** and **token**
+5. Copy the **endpoint URL** and **token** shown on screen — you only see these once
 
-### Step 3 — Configure
+### 3. Configure credentials
 
 ```bash
 cp .env.example .env
+# open .env and fill in the 3 values
 ```
 
-Open `.env` and fill in:
 ```
 OTX_API_KEY=your_otx_key
 XSIAM_BASE_URL=https://api-YOUR-TENANT.xdr.us.paloaltonetworks.com/logs/v1/event
 XSIAM_API_KEY=your_xsiam_token
 ```
 
-### Step 4 — Test
+### 4. Test
 
 ```bash
-# Collect from all feeds, print summary, skip XSIAM push
-python pipeline.py --dry-run
+# Collect from all feeds, preview full events table, skip XSIAM push
+python pipeline.py --dry-run --show-events
 ```
 
-You should see 100–500 events collected across all sources. If everything returns 0 with `ConnectError` — VPN or firewall is blocking outbound HTTP. Turn off VPN and retry.
+You should see 100–500 events in a table. If everything returns 0 with `ConnectError` — turn off VPN and retry.
 
-### Step 5 — Push to XSIAM
+### 5. Push to XSIAM
 
 ```bash
 python pipeline.py
 ```
 
-### Step 6 — Verify in XSIAM
+### 6. Find your data in XSIAM
 
-Go to **Investigation → XQL Search** and run:
+After the first successful push:
 
+1. Go to **XSIAM → Investigation → XQL Search**
+2. In the left panel, click **Datasets** — you should see `global_threat_intel_raw` appear after the first push
+3. Run:
 ```xql
 dataset = global_threat_intel_raw
 | limit 10
 ```
 
-Rows = working. Empty = check terminal output for errors.
+> **Why `_raw`?** XSIAM automatically appends `_raw` to the dataset name. The dataset does not exist until the first event is pushed — so if you only ran `--dry-run` it won't be there yet.
 
 ---
 
-## Running Commands
+## Automated Daily Schedule
 
-| Command | What it does |
-|---------|-------------|
-| `python pipeline.py --dry-run` | Collect + print summary, no XSIAM push |
-| `python pipeline.py` | Collect and push to XSIAM |
-| `python pipeline.py --days 7` | Backfill last 7 days (good for first run) |
-| `python main.py` | Local scheduler — runs daily at configured UTC time (terminal must stay open) |
+### Cloud (Claude Code) — collection only
 
----
+Already created. Runs every day at **6:00 AM UTC**.
 
-## Automated Daily Schedule (Claude Code)
-
-The recommended way to run this automatically is via the **Claude Code remote schedule** — no terminal needs to stay open.
-
-**Schedule is already created:** [claude.ai/code/scheduled](https://claude.ai/code/scheduled)  
-**Trigger name:** `xsiam-threat-intel-daily`  
-**Fires:** Every day at 6:00 AM UTC
-
-**One-time setup — add your credentials to the schedule:**
+**One-time step — add your OTX key:**
 1. Go to [claude.ai/code/scheduled](https://claude.ai/code/scheduled)
-2. Click on `xsiam-threat-intel-daily`
-3. Edit the prompt and replace the 3 placeholder values:
-   - `REPLACE_WITH_OTX_KEY` → your OTX API key
-   - `REPLACE_WITH_XSIAM_URL` → your XSIAM endpoint URL
-   - `REPLACE_WITH_XSIAM_TOKEN` → your XSIAM token
+2. Click `xsiam-threat-intel-daily` → edit the prompt
+3. Replace `REPLACE_WITH_YOUR_OTX_KEY` with your real OTX key
 4. Save
 
-From then on it runs every morning automatically, clones the repo fresh, runs the pipeline, and reports results.
+Every morning Claude Code clones the latest code from GitHub, collects from all feeds, and reports the full events table. CISA KEV, NVD, Feodo Tracker, ThreatFox, and URLhaus need no keys at all.
 
-**To run it immediately** (without waiting for 6 AM):
+**To run it right now** (without waiting for 6 AM), in Claude Code terminal:
 ```
-# In Claude Code terminal:
 /schedule run xsiam-threat-intel-daily
 ```
 
+### Local Mac (launchd) — full push to XSIAM
+
+Runs at **2:00 PM Singapore time** daily (= 6 AM UTC). Reads your local `.env` so XSIAM credentials never leave your machine.
+
+```bash
+# Install the launchd job (one-time)
+cp launchd/com.xsiam.threat-intel.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.xsiam.threat-intel.plist
+
+# Check it's registered
+launchctl list | grep xsiam
+
+# Run it right now manually
+launchctl start com.xsiam.threat-intel
+
+# View logs
+tail -f /tmp/xsiam-threat-intel.log
+
+# Remove it
+launchctl unload ~/Library/LaunchAgents/com.xsiam.threat-intel.plist
+```
+
 ---
 
-## Using the Claude Code Skill
+## Commands
 
-If you're using Claude Code, there's a built-in skill that handles the entire setup:
-
-```
-/setup-threat-intel
-```
-
-It will:
-1. Check for missing credentials and ask you for each one
-2. Run `--dry-run` to confirm feeds are working
-3. Push to XSIAM
-4. Walk you through verifying data in XQL
+| Command | What it does |
+|---------|-------------|
+| `python pipeline.py --dry-run` | Collect + summary, no XSIAM push |
+| `python pipeline.py --dry-run --show-events` | Collect + full events table + summary |
+| `python pipeline.py` | Collect and push to XSIAM |
+| `python pipeline.py --days 7` | Backfill last 7 days (good for first run) |
+| `python main.py` | Local scheduler fallback (terminal must stay open) |
 
 ---
 
-## XQL Queries (XSIAM → Investigation → XQL Search)
+## XQL Queries (Investigation → XQL Search)
 
 **All events today**
 ```xql
@@ -168,7 +181,7 @@ dataset = global_threat_intel_raw
 | fields _time, cve_id, affected_product, severity, description
 ```
 
-**Did a bad IP hit your environment?**
+**Did a bad IP hit your environment?** *(needs endpoints in XSIAM)*
 ```xql
 dataset = xdr_data
 | filter _time > now() - 1d
@@ -199,6 +212,15 @@ Severity: Critical
 
 ---
 
+## Using the Claude Code Skill
+
+```
+/setup-threat-intel
+```
+Guides you through credentials, runs the pipeline, and verifies data in XSIAM.
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Description |
@@ -209,24 +231,3 @@ Severity: Critical
 | `NVD_API_KEY` | No | Increases NVD rate limits (free at nvd.nist.gov) |
 | `SCHEDULE_HOUR` | No | UTC hour for local scheduler (default: 6) |
 | `SCHEDULE_MINUTE` | No | UTC minute (default: 0) |
-
----
-
-## Project Structure
-
-```
-├── collectors/
-│   ├── alienvault_otx.py   # OTX campaigns + banking IOCs
-│   ├── cisa_kev.py         # Actively exploited CVEs
-│   ├── nvd_cve.py          # New CVEs (last 24h)
-│   ├── feodo_tracker.py    # Live C2 IPs for banking trojans
-│   ├── threatfox.py        # IOCs by malware family
-│   └── urlhaus.py          # Malicious URLs
-├── normalizer/
-│   └── schema.py           # ThreatEvent — unified schema for all sources
-├── xsiam/
-│   └── ingestor.py         # Batches + POSTs to XSIAM
-├── pipeline.py             # Main runner (collect → deduplicate → push)
-├── main.py                 # Local scheduler fallback
-└── config.py               # Loads settings from .env
-```
