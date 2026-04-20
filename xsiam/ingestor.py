@@ -20,7 +20,7 @@ class XSIAMIngestor:
     def _headers(self) -> dict:
         return {
             "Authorization": self._api_key,
-            "Content-Type": "application/json",
+            "Content-Type": "text/plain",
         }
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=15))
