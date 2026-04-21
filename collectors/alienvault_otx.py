@@ -63,10 +63,15 @@ class AlienVaultOTXCollector(BaseCollector):
         combined = pulse_tags | set(pulse_name.split()) | set(pulse_desc.split())
         return bool(combined & BANKING_TAGS)
 
-    def _severity_from_tlp(self, tlp: str) -> str:
-        return {"red": "critical", "amber": "high", "green": "medium", "white": "low"}.get(
-            (tlp or "").lower(), "medium"
-        )
+    def _severity_from_pulse(self, pulse: dict) -> str:
+        tlp = (pulse.get("tlp") or "").lower()
+        base = {"red": "critical", "amber": "high", "green": "medium"}.get(tlp, "medium")
+        # Escalate based on keywords in name/description regardless of TLP
+        text = f"{pulse.get('name','')} {pulse.get('description','')}".lower()
+        high_keywords = {"apt", "ransomware", "zero-day", "0day", "critical", "supply chain", "nation state"}
+        if base == "medium" and any(k in text for k in high_keywords):
+            return "high"
+        return base
 
     def _extract_mitre(self, pulse: dict) -> tuple[Optional[str], Optional[str]]:
         for ref in pulse.get("references", []):
@@ -96,7 +101,7 @@ class AlienVaultOTXCollector(BaseCollector):
                 is_banking = self._is_banking_related(pulse)
                 sector = "banking" if is_banking else None
                 tactic, technique = self._extract_mitre(pulse)
-                severity = self._severity_from_tlp(pulse.get("tlp", "white"))
+                severity = self._severity_from_pulse(pulse)
 
                 # One campaign-level event per pulse
                 events.append(ThreatEvent(

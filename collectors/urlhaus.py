@@ -5,6 +5,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from collectors.base import BaseCollector
 from normalizer.schema import ThreatEvent
+from config import settings
 
 
 API_URL = "https://urlhaus-api.abuse.ch/v1/urls/recent/limit/500/"
@@ -18,9 +19,15 @@ BANKING_TAGS = {
 class URLhausCollector(BaseCollector):
     name = "URLhaus"
 
+    def __init__(self) -> None:
+        self._api_key = settings.abusech_api_key
+
+    def _headers(self) -> dict:
+        return {"Auth-Key": self._api_key} if self._api_key else {}
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
     async def _fetch(self, client: httpx.AsyncClient) -> list:
-        resp = await client.get(API_URL, timeout=30)
+        resp = await client.get(API_URL, headers=self._headers(), timeout=30)
         resp.raise_for_status()
         data = resp.json()
         return data.get("urls", [])

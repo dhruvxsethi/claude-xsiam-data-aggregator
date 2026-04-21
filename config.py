@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     # AlienVault OTX
     otx_api_key: str = ""
 
+    # abuse.ch (ThreatFox + URLhaus) — one key covers both
+    # Free at: https://abuse.ch/account (click "Get API key")
+    abusech_api_key: str = ""
+
     # NVD
     nvd_api_key: str = ""
 
