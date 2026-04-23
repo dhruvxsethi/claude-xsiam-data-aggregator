@@ -7,10 +7,22 @@ from collectors.base import BaseCollector
 from normalizer.schema import ThreatEvent
 
 
-BANKING_KEYWORDS = {
-    "apache", "cisco", "f5", "citrix", "pulse", "fortinet", "vmware",
-    "exchange", "sharepoint", "confluence", "jira",
-    # Financial malware families often exploit these
+# Keyword sets for sector detection in KEV entries (vendor/product/description)
+SECTOR_KEYWORDS: dict[str, set] = {
+    "banking": {
+        "banking", "financial", "swift", "payment", "atm", "pos",
+        # Infra heavily used in banking
+        "f5", "citrix", "fortinet", "pulse secure", "ivanti",
+    },
+    "telecom": {
+        "telecom", "telecommunication", "mobile", "carrier", "voip",
+        "cisco ios", "juniper", "ericsson", "nokia", "5g", "ss7",
+    },
+    "government": {
+        "government", "federal", "military", "defense", "scada", "ics",
+        "industrial control", "critical infrastructure", "energy", "water",
+        "microsoft exchange", "sharepoint", "citrix", "vmware",
+    },
 }
 
 FEED_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
@@ -63,8 +75,12 @@ class CISAKEVCollector(BaseCollector):
             description = vuln.get("shortDescription", "")
             combined = f"{product} {vendor} {description}".lower()
 
-            # Determine if relevant to banking infrastructure
-            sector = "banking" if any(k in combined for k in BANKING_KEYWORDS) else None
+            # Detect first matching sector (priority: banking → telecom → government)
+            sector = None
+            for s, keywords in SECTOR_KEYWORDS.items():
+                if any(k in combined for k in keywords):
+                    sector = s
+                    break
 
             events.append(ThreatEvent(
                 source_feed=self.name,

@@ -8,11 +8,28 @@ from normalizer.schema import ThreatEvent
 from config import settings
 
 
-# OTX pulse tags that indicate banking/financial sector threats
-BANKING_TAGS = {
-    "banking", "finance", "financial", "bank", "swift", "atm",
-    "emotet", "qakbot", "dridex", "trickbot", "ursnif", "ramnit",
-    "fin7", "fin8", "carbanak", "lazarus", "cobalt group",
+# ── Sector keyword sets ──────────────────────────────────────────────────────
+
+SECTOR_TAGS: dict[str, set] = {
+    "banking": {
+        "banking", "finance", "financial", "bank", "swift", "atm",
+        "emotet", "qakbot", "dridex", "trickbot", "ursnif", "ramnit",
+        "fin7", "fin8", "carbanak", "lazarus", "cobalt group",
+        "payment", "wire fraud", "ach", "pos malware",
+    },
+    "telecom": {
+        "telecom", "telecommunications", "telco", "mobile network", "5g", "4g",
+        "carrier", "isp", "internet service provider", "ss7", "diameter",
+        "bgp hijack", "voip", "salt typhoon", "volt typhoon",
+        "huawei", "ericsson", "nokia", "wiretap",
+    },
+    "government": {
+        "government", "nation-state", "espionage", "military", "defense",
+        "critical infrastructure", "national security", "ics", "scada", "ot",
+        "apt28", "apt29", "apt41", "sandworm", "cozy bear", "fancy bear",
+        "lazarus", "kimsuky", "mustang panda", "turla", "equation group",
+        "election", "parliament", "ministry", "intelligence agency",
+    },
 }
 
 SEVERITY_MAP = {
@@ -56,19 +73,32 @@ class AlienVaultOTXCollector(BaseCollector):
         resp.raise_for_status()
         return resp.json().get("results", [])
 
-    def _is_banking_related(self, pulse: dict) -> bool:
+    def _detect_sectors(self, pulse: dict) -> List[str]:
+        """Return all matching sector names for a pulse, in priority order."""
         pulse_tags = {t.lower() for t in pulse.get("tags", [])}
         pulse_name = pulse.get("name", "").lower()
         pulse_desc = pulse.get("description", "").lower()
-        combined = pulse_tags | set(pulse_name.split()) | set(pulse_desc.split())
-        return bool(combined & BANKING_TAGS)
+        combined_text = f"{pulse_name} {pulse_desc}"
+        combined = pulse_tags | set(combined_text.split())
+
+        matched = []
+        for sector, keywords in SECTOR_TAGS.items():
+            if sector not in self._target_sectors:
+                continue
+            # Check both full-phrase and word-by-word matches
+            if combined & keywords or any(kw in combined_text for kw in keywords):
+                matched.append(sector)
+
+        return matched
 
     def _severity_from_pulse(self, pulse: dict) -> str:
         tlp = (pulse.get("tlp") or "").lower()
         base = {"red": "critical", "amber": "high", "green": "medium"}.get(tlp, "medium")
-        # Escalate based on keywords in name/description regardless of TLP
         text = f"{pulse.get('name','')} {pulse.get('description','')}".lower()
-        high_keywords = {"apt", "ransomware", "zero-day", "0day", "critical", "supply chain", "nation state"}
+        high_keywords = {
+            "apt", "ransomware", "zero-day", "0day", "critical",
+            "supply chain", "nation state", "nation-state", "espionage",
+        }
         if base == "medium" and any(k in text for k in high_keywords):
             return "high"
         return base
@@ -95,11 +125,12 @@ class AlienVaultOTXCollector(BaseCollector):
                 self._warn(f"Failed to fetch pulses: {e}")
                 return []
 
-            self._log(f"Fetched {len(pulses)} pulses from last 24h")
+            self._log(f"Fetched {len(pulses)} pulses from last {days}d")
 
             for pulse in pulses:
-                is_banking = self._is_banking_related(pulse)
-                sector = "banking" if is_banking else None
+                matched_sectors = self._detect_sectors(pulse)
+                # Primary sector (first match) used on the campaign event
+                primary_sector = matched_sectors[0] if matched_sectors else None
                 tactic, technique = self._extract_mitre(pulse)
                 severity = self._severity_from_pulse(pulse)
 
@@ -110,18 +141,18 @@ class AlienVaultOTXCollector(BaseCollector):
                     event_type="campaign",
                     threat_actor=pulse.get("author_name"),
                     campaign_name=pulse.get("name"),
-                    target_sector=sector,
+                    target_sector=primary_sector,
                     mitre_tactic=tactic,
                     mitre_technique=technique,
                     severity=severity,
                     title=pulse.get("name", "Unknown Pulse"),
                     description=pulse.get("description", "")[:500],
-                    tags=pulse.get("tags", []),
+                    tags=pulse.get("tags", []) + (matched_sectors if matched_sectors else []),
                     reference_url=f"https://otx.alienvault.com/pulse/{pulse.get('id')}",
                 ))
 
-                # IOC-level events for banking pulses
-                if is_banking:
+                # IOC-level events for sector-matched pulses
+                if matched_sectors:
                     try:
                         indicators = await self._get_pulse_indicators(client, pulse["id"])
                         for ind in indicators[:50]:  # cap per pulse
@@ -133,14 +164,14 @@ class AlienVaultOTXCollector(BaseCollector):
                                 source_event_id=str(ind.get("id")) if ind.get("id") is not None else None,
                                 event_type="ioc",
                                 campaign_name=pulse.get("name"),
-                                target_sector="banking",
+                                target_sector=primary_sector,
                                 ioc_type=ioc_type,
                                 ioc_value=ind.get("indicator"),
                                 mitre_technique=technique,
                                 severity=severity,
                                 title=f"IOC: {ind.get('indicator', '')}",
                                 description=ind.get("description", "") or pulse.get("name", ""),
-                                tags=pulse.get("tags", []),
+                                tags=pulse.get("tags", []) + matched_sectors,
                             ))
                     except Exception as e:
                         self._warn(f"Could not fetch indicators for pulse {pulse.get('id')}: {e}")

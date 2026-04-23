@@ -19,6 +19,7 @@ from collectors.nvd_cve import NVDCollector
 from collectors.feodo_tracker import FeodoTrackerCollector
 from collectors.threatfox import ThreatFoxCollector
 from collectors.urlhaus import URLhausCollector
+from collectors.claude_news import ClaudeNewsCollector
 from normalizer.schema import ThreatEvent
 from xsiam.ingestor import XSIAMIngestor
 
@@ -54,14 +55,15 @@ def deduplicate(events: List[ThreatEvent]) -> List[ThreatEvent]:
 def print_events_table(events: List[ThreatEvent]) -> None:
     """Print every event as a readable table — exactly what gets pushed to XSIAM."""
     SEV_LABEL = {"critical": "CRIT", "high": "HIGH", "medium": "MED ", "low": "LOW ", "info": "INFO"}
-    col = {"time": 20, "source": 18, "type": 13, "sev": 6, "detail": 45}
+    col = {"time": 20, "source": 16, "type": 13, "sector": 11, "sev": 6, "detail": 44}
     hr = "─" * (sum(col.values()) + len(col) * 3 + 1)
 
-    print(f"\n{'─' * 20} EVENTS THAT WOULD BE PUSHED TO XSIAM {'─' * 20}")
+    print(f"\n{'─' * 18} EVENTS THAT WOULD BE PUSHED TO XSIAM {'─' * 18}")
     header = (
         f"{'TIMESTAMP':<{col['time']}}  "
         f"{'SOURCE':<{col['source']}}  "
         f"{'TYPE':<{col['type']}}  "
+        f"{'SECTOR':<{col['sector']}}  "
         f"{'SEV':<{col['sev']}}  "
         f"{'TITLE / IOC / CVE':<{col['detail']}}"
     )
@@ -83,10 +85,12 @@ def print_events_table(events: List[ThreatEvent]) -> None:
             detail = e.title
 
         sev = SEV_LABEL.get(e.severity, e.severity[:4].upper())
+        sector = (e.target_sector or "—")[:col["sector"]]
         print(
             f"{ts:<{col['time']}}  "
             f"{e.source_feed:<{col['source']}}  "
             f"{e.event_type:<{col['type']}}  "
+            f"{sector:<{col['sector']}}  "
             f"{sev:<{col['sev']}}  "
             f"{detail[:col['detail']]:<{col['detail']}}"
         )
@@ -99,15 +103,15 @@ def print_summary(events: List[ThreatEvent], pushed: int, dry_run: bool) -> None
     by_source: dict = defaultdict(int)
     by_type: dict = defaultdict(int)
     by_severity: dict = defaultdict(int)
-    banking_count = 0
+    by_sector: dict = defaultdict(int)
     multi_source_iocs = 0
 
     for e in events:
         by_source[e.source_feed] += 1
         by_type[e.event_type] += 1
         by_severity[e.severity] += 1
-        if e.target_sector in ("banking", "finance"):
-            banking_count += 1
+        if e.target_sector:
+            by_sector[e.target_sector] += 1
         if len(e.seen_in) > 1:
             multi_source_iocs += 1
 
@@ -115,9 +119,14 @@ def print_summary(events: List[ThreatEvent], pushed: int, dry_run: bool) -> None
     print("  THREAT INTEL PIPELINE — RUN SUMMARY")
     print("=" * 55)
     print(f"  Total events collected : {len(events)}")
-    print(f"  Banking/finance related: {banking_count}")
     print(f"  IOCs seen in 2+ feeds  : {multi_source_iocs}  ← high confidence")
     print(f"  Pushed to XSIAM        : {pushed if not dry_run else 'skipped (dry-run)'}")
+    print()
+    print("  By sector:")
+    for sector, count in sorted(by_sector.items(), key=lambda x: -x[1]):
+        print(f"    {sector:<28} {count}")
+    if not by_sector:
+        print("    (none tagged — expand TARGET_SECTORS in .env)")
     print()
     print("  By source:")
     for src, count in sorted(by_source.items(), key=lambda x: -x[1]):
@@ -142,6 +151,7 @@ async def run_pipeline(dry_run: bool = False, days: int = 1, show_events: bool =
         FeodoTrackerCollector(),
         ThreatFoxCollector(),
         URLhausCollector(),
+        ClaudeNewsCollector(),   # live web search — requires ANTHROPIC_API_KEY
     ]
 
     all_events: List[ThreatEvent] = []

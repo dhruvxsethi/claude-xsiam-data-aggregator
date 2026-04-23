@@ -11,10 +11,31 @@ from config import settings
 
 NVD_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
-# CVEs relevant to banking/financial sector infrastructure and common attack vectors
-BANKING_SEARCH_TERMS = [
-    "banking", "financial", "swift", "payment", "ATM",
-    "Fortinet", "Citrix", "F5", "Cisco", "Palo Alto",  # common in banking infra
+# Search terms grouped by sector.
+# Each tuple is (search_term, sector_label).
+# Shared infra terms (Fortinet, Cisco, etc.) tag as None since they span all sectors.
+SECTOR_SEARCH_TERMS: list[tuple[str, str | None]] = [
+    # Banking / Financial
+    ("banking", "banking"),
+    ("financial", "banking"),
+    ("swift", "banking"),
+    ("payment", "banking"),
+    ("ATM", "banking"),
+    # Telecom
+    ("telecom", "telecom"),
+    ("5G", "telecom"),
+    ("VoIP", "telecom"),
+    ("SS7", "telecom"),
+    # Government / Critical infrastructure
+    ("government", "government"),
+    ("SCADA", "government"),
+    ("industrial control", "government"),
+    # Shared critical infra — relevant to all sectors
+    ("Fortinet", None),
+    ("Citrix", None),
+    ("F5", None),
+    ("Cisco", None),
+    ("Palo Alto", None),
 ]
 
 
@@ -71,7 +92,7 @@ class NVDCollector(BaseCollector):
         delay = 6.5 if not self._api_key else 0.6
 
         async with httpx.AsyncClient() as client:
-            for i, term in enumerate(BANKING_SEARCH_TERMS):
+            for i, (term, sector) in enumerate(SECTOR_SEARCH_TERMS):
                 if i > 0:
                     await asyncio.sleep(delay)
                 try:
@@ -110,7 +131,7 @@ class NVDCollector(BaseCollector):
                         source_feed=self.name,
                         source_event_id=cve_id,
                         event_type="vulnerability",
-                        target_sector="banking" if term.lower() in {"banking", "financial", "swift", "payment", "atm"} else None,
+                        target_sector=sector,
                         cve_id=cve_id,
                         cvss_score=score,
                         affected_product=", ".join(affected[:3]) if affected else None,
@@ -118,7 +139,7 @@ class NVDCollector(BaseCollector):
                         title=f"{cve_id} ({term})",
                         description=desc[:500],
                         reference_url=f"https://nvd.nist.gov/vuln/detail/{cve_id}",
-                        tags=["nvd", f"keyword:{term}"],
+                        tags=["nvd", f"keyword:{term}"] + ([sector] if sector else []),
                     ))
 
         self._log(f"Collected {len(events)} CVEs")

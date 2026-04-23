@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     # NVD
     nvd_api_key: str = ""
 
+    # Anthropic — used by Claude AI News Collector (web search)
+    # Free tier available at: https://console.anthropic.com
+    anthropic_api_key: str = ""
+
     # XSIAM
     xsiam_base_url: str = ""
     xsiam_api_key: str = ""
@@ -24,8 +28,9 @@ class Settings(BaseSettings):
     schedule_hour: int = 6
     schedule_minute: int = 0
 
-    # Filtering
-    target_sectors: str = "banking,finance,financial"
+    # Filtering — comma-separated sectors to track
+    # Supported: banking, telecom, government (plus any custom sector for Claude AI collector)
+    target_sectors: str = "banking,telecom,government"
 
     @field_validator("xsiam_base_url")
     @classmethod
