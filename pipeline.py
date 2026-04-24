@@ -1,10 +1,12 @@
 """
-Core pipeline: collect → deduplicate → push to XSIAM.
+Core pipeline: collect → deduplicate → return events.
 
-Flags:
-  --dry-run       Collect only, skip XSIAM push
-  --show-events   Print every collected event as a table (combine with --dry-run to preview what would be pushed)
-  --days N        Look back N days instead of 24h (default: 1, max: 7)
+No XSIAM push logic here — that lives on the client (work laptop).
+
+CLI usage (local testing):
+  python pipeline.py                  collect + print summary
+  python pipeline.py --show-events    print every event as a table
+  python pipeline.py --days 3         look back 3 days
 """
 
 import asyncio
@@ -21,7 +23,6 @@ from collectors.threatfox import ThreatFoxCollector
 from collectors.urlhaus import URLhausCollector
 from collectors.claude_news import ClaudeNewsCollector
 from normalizer.schema import ThreatEvent
-from xsiam.ingestor import XSIAMIngestor
 
 
 def deduplicate(events: List[ThreatEvent]) -> List[ThreatEvent]:
@@ -52,14 +53,38 @@ def deduplicate(events: List[ThreatEvent]) -> List[ThreatEvent]:
     return result
 
 
+async def collect_events(days: int = 1) -> List[ThreatEvent]:
+    """Collect from all sources, deduplicate, and return. No side effects."""
+    collectors = [
+        AlienVaultOTXCollector(),
+        CISAKEVCollector(),
+        NVDCollector(),
+        FeodoTrackerCollector(),
+        ThreatFoxCollector(),
+        URLhausCollector(),
+        ClaudeNewsCollector(),
+    ]
+
+    all_events: List[ThreatEvent] = []
+    for collector in collectors:
+        try:
+            events = await collector.collect(days=days)
+            all_events.extend(events)
+        except Exception as e:
+            logger.error(f"[Pipeline] {collector.name} crashed: {e}")
+
+    return deduplicate(all_events)
+
+
+# ── CLI helpers (local testing only) ─────────────────────────────────────────
+
 def print_events_table(events: List[ThreatEvent]) -> None:
-    """Print every event as a readable table — exactly what gets pushed to XSIAM."""
     SEV_LABEL = {"critical": "CRIT", "high": "HIGH", "medium": "MED ", "low": "LOW ", "info": "INFO"}
     col = {"time": 20, "source": 16, "type": 13, "sector": 11, "sev": 6, "detail": 44}
     hr = "─" * (sum(col.values()) + len(col) * 3 + 1)
 
-    print(f"\n{'─' * 18} EVENTS THAT WOULD BE PUSHED TO XSIAM {'─' * 18}")
-    header = (
+    print(f"\n{'─' * 18} COLLECTED EVENTS {'─' * 18}")
+    print(
         f"{'TIMESTAMP':<{col['time']}}  "
         f"{'SOURCE':<{col['source']}}  "
         f"{'TYPE':<{col['type']}}  "
@@ -67,12 +92,10 @@ def print_events_table(events: List[ThreatEvent]) -> None:
         f"{'SEV':<{col['sev']}}  "
         f"{'TITLE / IOC / CVE':<{col['detail']}}"
     )
-    print(header)
     print(hr)
 
     for e in events:
         ts = e.record_time[:19].replace("T", " ")
-
         if e.event_type == "ioc":
             detail = f"{e.ioc_type}: {e.ioc_value}"
             if e.threat_family:
@@ -96,10 +119,10 @@ def print_events_table(events: List[ThreatEvent]) -> None:
         )
 
     print(hr)
-    print(f"  Total: {len(events)} events  |  ⚑ = seen in multiple feeds (high confidence)\n")
+    print(f"  Total: {len(events)} events  |  ⚑ = seen in multiple feeds\n")
 
 
-def print_summary(events: List[ThreatEvent], pushed: int, dry_run: bool) -> None:
+def print_summary(events: List[ThreatEvent]) -> None:
     by_source: dict = defaultdict(int)
     by_type: dict = defaultdict(int)
     by_severity: dict = defaultdict(int)
@@ -115,84 +138,41 @@ def print_summary(events: List[ThreatEvent], pushed: int, dry_run: bool) -> None
         if len(e.seen_in) > 1:
             multi_source_iocs += 1
 
-    print("\n" + "=" * 55)
-    print("  THREAT INTEL PIPELINE — RUN SUMMARY")
-    print("=" * 55)
-    print(f"  Total events collected : {len(events)}")
-    print(f"  IOCs seen in 2+ feeds  : {multi_source_iocs}  ← high confidence")
-    print(f"  Pushed to XSIAM        : {pushed if not dry_run else 'skipped (dry-run)'}")
+    print("\n" + "=" * 50)
+    print("  THREAT INTEL — COLLECTION SUMMARY")
+    print("=" * 50)
+    print(f"  Total events     : {len(events)}")
+    print(f"  Multi-feed IOCs  : {multi_source_iocs}  ← high confidence")
     print()
     print("  By sector:")
-    for sector, count in sorted(by_sector.items(), key=lambda x: -x[1]):
-        print(f"    {sector:<28} {count}")
-    if not by_sector:
-        print("    (none tagged — expand TARGET_SECTORS in .env)")
+    for s, c in sorted(by_sector.items(), key=lambda x: -x[1]):
+        print(f"    {s:<26} {c}")
     print()
     print("  By source:")
-    for src, count in sorted(by_source.items(), key=lambda x: -x[1]):
-        print(f"    {src:<28} {count}")
+    for s, c in sorted(by_source.items(), key=lambda x: -x[1]):
+        print(f"    {s:<26} {c}")
     print()
     print("  By type:")
-    for t, count in sorted(by_type.items(), key=lambda x: -x[1]):
-        print(f"    {t:<28} {count}")
+    for t, c in sorted(by_type.items(), key=lambda x: -x[1]):
+        print(f"    {t:<26} {c}")
     print()
     print("  By severity:")
     for sev in ["critical", "high", "medium", "low", "info"]:
         if sev in by_severity:
-            print(f"    {sev:<28} {by_severity[sev]}")
-    print("=" * 55 + "\n")
-
-
-async def run_pipeline(dry_run: bool = False, days: int = 1, show_events: bool = False) -> dict:
-    collectors = [
-        AlienVaultOTXCollector(),
-        CISAKEVCollector(),
-        NVDCollector(),
-        FeodoTrackerCollector(),
-        ThreatFoxCollector(),
-        URLhausCollector(),
-        ClaudeNewsCollector(),   # live web search — requires ANTHROPIC_API_KEY
-    ]
-
-    all_events: List[ThreatEvent] = []
-
-    for collector in collectors:
-        try:
-            events = await collector.collect(days=days)
-            all_events.extend(events)
-        except Exception as e:
-            logger.error(f"[Pipeline] {collector.name} crashed: {e}")
-
-    all_events = deduplicate(all_events)
-
-    if show_events:
-        print_events_table(all_events)
-
-    pushed = 0
-    if dry_run:
-        logger.info("[Pipeline] Dry-run — skipping XSIAM push")
-    else:
-        ingestor = XSIAMIngestor()
-        pushed = await ingestor.ingest(all_events)
-
-    summary = {
-        "total_collected": len(all_events),
-        "total_pushed": pushed,
-        "dry_run": dry_run,
-        "by_source": {},
-    }
-    for event in all_events:
-        summary["by_source"].setdefault(event.source_feed, 0)
-        summary["by_source"][event.source_feed] += 1
-
-    print_summary(all_events, pushed, dry_run)
-    return summary
+            print(f"    {sev:<26} {by_severity[sev]}")
+    print("=" * 50 + "\n")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Threat intel pipeline")
-    parser.add_argument("--dry-run", action="store_true", help="Collect only, skip XSIAM push")
+    parser = argparse.ArgumentParser(description="Collect threat intel (local test)")
     parser.add_argument("--show-events", action="store_true", help="Print every event as a table")
-    parser.add_argument("--days", type=int, default=1, help="How many days back to pull (default: 1)")
+    parser.add_argument("--days", type=int, default=1, help="Days to look back (default: 1)")
     args = parser.parse_args()
-    asyncio.run(run_pipeline(dry_run=args.dry_run, days=args.days, show_events=args.show_events))
+
+    async def _main():
+        events = await collect_events(days=args.days)
+        if args.show_events:
+            print_events_table(events)
+        print_summary(events)
+
+    asyncio.run(_main())
