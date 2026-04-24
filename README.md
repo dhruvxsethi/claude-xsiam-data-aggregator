@@ -34,12 +34,12 @@ cp .env.example .env   # fill in keys
 
 **Credentials needed (all free):**
 
-| Variable | Where to get it |
-|----------|----------------|
-| `OTX_API_KEY` | [otx.alienvault.com](https://otx.alienvault.com) → API Integration |
-| `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) → API Keys (add $5 USD credits) |
-| `NVD_API_KEY` | Optional — [nvd.nist.gov](https://nvd.nist.gov/developers/request-an-api-key) |
-| `ABUSECH_API_KEY` | Optional — [abuse.ch/account](https://abuse.ch/account) (covers ThreatFox + URLhaus) |
+| Variable | Required | Where to get it |
+|----------|----------|----------------|
+| `OTX_API_KEY` | Yes | [otx.alienvault.com](https://otx.alienvault.com) → API Integration |
+| `ANTHROPIC_API_KEY` | Optional | [console.anthropic.com](https://console.anthropic.com) → API Keys (needs $5 USD credits). Without it the Claude AI live-web-search collector is skipped — the other 6 feeds still run. |
+| `NVD_API_KEY` | Optional | [nvd.nist.gov](https://nvd.nist.gov/developers/request-an-api-key) — increases rate limits |
+| `ABUSECH_API_KEY` | Optional | [abuse.ch/account](https://abuse.ch/account) — covers ThreatFox + URLhaus |
 
 ---
 
