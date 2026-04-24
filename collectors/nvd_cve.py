@@ -11,31 +11,15 @@ from config import settings
 
 NVD_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 
-# Search terms grouped by sector.
-# Each tuple is (search_term, sector_label).
-# Shared infra terms (Fortinet, Cisco, etc.) tag as None since they span all sectors.
+# Kept small on purpose — NVD rate-limits to 1 req/6s without an API key.
+# Each extra term adds ~6.5s. Add NVD_API_KEY to .env to safely expand this.
 SECTOR_SEARCH_TERMS: list[tuple[str, str | None]] = [
-    # Banking / Financial
-    ("banking", "banking"),
-    ("financial", "banking"),
-    ("swift", "banking"),
-    ("payment", "banking"),
-    ("ATM", "banking"),
-    # Telecom
-    ("telecom", "telecom"),
-    ("5G", "telecom"),
-    ("VoIP", "telecom"),
-    ("SS7", "telecom"),
-    # Government / Critical infrastructure
+    ("banking",    "banking"),
+    ("telecom",    "telecom"),
     ("government", "government"),
-    ("SCADA", "government"),
-    ("industrial control", "government"),
-    # Shared critical infra — relevant to all sectors
-    ("Fortinet", None),
-    ("Citrix", None),
-    ("F5", None),
-    ("Cisco", None),
-    ("Palo Alto", None),
+    ("SCADA",      "government"),
+    ("Fortinet",   None),
+    ("Cisco",      None),
 ]
 
 

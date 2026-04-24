@@ -53,8 +53,14 @@ def deduplicate(events: List[ThreatEvent]) -> List[ThreatEvent]:
     return result
 
 
-async def collect_events(days: int = 1) -> List[ThreatEvent]:
-    """Collect from all sources, deduplicate, and return. No side effects."""
+SEV_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+
+
+async def collect_events(days: int = 1, limit: int = 0) -> List[ThreatEvent]:
+    """
+    Collect from all sources in parallel, deduplicate, and return.
+    limit=0 means no cap. When limit>0, returns the top events by severity.
+    """
     collectors = [
         AlienVaultOTXCollector(),
         CISAKEVCollector(),
@@ -65,15 +71,24 @@ async def collect_events(days: int = 1) -> List[ThreatEvent]:
         ClaudeNewsCollector(),
     ]
 
-    all_events: List[ThreatEvent] = []
-    for collector in collectors:
+    async def _safe_collect(c):
         try:
-            events = await collector.collect(days=days)
-            all_events.extend(events)
+            return await c.collect(days=days)
         except Exception as e:
-            logger.error(f"[Pipeline] {collector.name} crashed: {e}")
+            logger.error(f"[Pipeline] {c.name} crashed: {e}")
+            return []
 
-    return deduplicate(all_events)
+    # Run all collectors concurrently
+    results = await asyncio.gather(*[_safe_collect(c) for c in collectors])
+    all_events: List[ThreatEvent] = [e for batch in results for e in batch]
+    all_events = deduplicate(all_events)
+
+    if limit and len(all_events) > limit:
+        all_events.sort(key=lambda e: SEV_ORDER.get(e.severity, 0), reverse=True)
+        all_events = all_events[:limit]
+        logger.info(f"[Pipeline] Capped to top {limit} events by severity")
+
+    return all_events
 
 
 # ── CLI helpers (local testing only) ─────────────────────────────────────────
@@ -167,10 +182,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Collect threat intel (local test)")
     parser.add_argument("--show-events", action="store_true", help="Print every event as a table")
     parser.add_argument("--days", type=int, default=1, help="Days to look back (default: 1)")
+    parser.add_argument("--limit", type=int, default=0, help="Cap events to top N by severity (0 = no cap)")
     args = parser.parse_args()
 
     async def _main():
-        events = await collect_events(days=args.days)
+        events = await collect_events(days=args.days, limit=args.limit)
         if args.show_events:
             print_events_table(events)
         print_summary(events)

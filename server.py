@@ -64,6 +64,7 @@ async def health():
 @app.get("/events")
 async def get_events(
     days: int = Query(1, description="How many days back to pull (1–7)", ge=1, le=7),
+    limit: int = Query(0, description="Cap to top N events by severity (0 = no cap)", ge=0),
     refresh: bool = Query(False, description="Force re-collect even if cache is fresh"),
 ):
     """
@@ -73,8 +74,9 @@ async def get_events(
     """
     global _cache
 
-    # Return cache if fresh and same day range
-    if _cache and not refresh and _cache.get("days") == days:
+    # Return cache if fresh, same day range, and limit fits
+    cache_key = (days, limit)
+    if _cache and not refresh and _cache.get("cache_key") == cache_key:
         age_minutes = (
             datetime.now(timezone.utc) - datetime.fromisoformat(_cache["cached_at"])
         ).seconds / 60
@@ -88,13 +90,13 @@ async def get_events(
             })
 
     # Fresh collection
-    events = await collect_events(days=days)
+    events = await collect_events(days=days, limit=limit)
     serialized = [_to_dict(e) for e in events]
 
     _cache = {
         "events": serialized,
         "cached_at": datetime.now(timezone.utc).isoformat(),
-        "days": days,
+        "cache_key": cache_key,
     }
 
     return JSONResponse({
