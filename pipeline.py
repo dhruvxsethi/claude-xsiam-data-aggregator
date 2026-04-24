@@ -64,7 +64,7 @@ async def collect_events(days: int = 1, limit: int = 0) -> List[ThreatEvent]:
     collectors = [
         AlienVaultOTXCollector(),
         CISAKEVCollector(),
-        NVDCollector(),
+        # NVDCollector(),      # re-enable once NVD_API_KEY is set (free: nvd.nist.gov/developers/request-an-api-key)
         FeodoTrackerCollector(),
         ThreatFoxCollector(),
         URLhausCollector(),
